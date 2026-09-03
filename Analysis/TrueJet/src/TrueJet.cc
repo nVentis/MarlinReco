@@ -182,12 +182,46 @@ void TrueJet::processEvent(LCEvent* event) {
       seen[kk] = false;
     }
 
+    // create the output collections and navigators up front, so that they can be added to the event
+    // (empty) even if true_lepton() below fails to find a consistent state.
+
+    LCCollectionVec* jet_vec = new LCCollectionVec(LCIO::RECONSTRUCTEDPARTICLE);
+    LCCollectionVec* fafpf_vec = new LCCollectionVec(LCIO::RECONSTRUCTEDPARTICLE);
+    LCCollectionVec* fafpi_vec = new LCCollectionVec(LCIO::RECONSTRUCTEDPARTICLE);
+
+    LCRelationNavigator truejet_pfo_Nav(LCIO::RECONSTRUCTEDPARTICLE, LCIO::RECONSTRUCTEDPARTICLE);
+    LCRelationNavigator truejet_truepart_Nav(LCIO::RECONSTRUCTEDPARTICLE, LCIO::MCPARTICLE);
+    LCRelationNavigator InitialElementon_Nav(LCIO::RECONSTRUCTEDPARTICLE, LCIO::MCPARTICLE);
+    LCRelationNavigator FinalElementon_Nav(LCIO::RECONSTRUCTEDPARTICLE, LCIO::MCPARTICLE);
+    LCRelationNavigator InitialColourNeutral_Nav(LCIO::RECONSTRUCTEDPARTICLE, LCIO::RECONSTRUCTEDPARTICLE);
+    LCRelationNavigator FinalColourNeutral_Nav(LCIO::RECONSTRUCTEDPARTICLE, LCIO::RECONSTRUCTEDPARTICLE);
+
     // the actual work happens in the following routines. They are each responible to
     // find jets stemming from different sources, as indicated by their names.
 
     cluster();
 
-    true_lepton();
+    if (!true_lepton()) {
+      streamlog_out(ERROR) << " true_lepton() could not resolve a consistent state - writing empty output "
+                              "collections for event: "
+                           << evt->getEventNumber() << ",   run:  " << evt->getRunNumber() << std::endl;
+
+      if (reltrue)
+        delete reltrue;
+      _nEvt++;
+
+      evt->addCollection(jet_vec, _trueJetCollectionName);
+      evt->addCollection(fafpf_vec, _finalColourNeutralCollectionName);
+      evt->addCollection(fafpi_vec, _initialColourNeutralCollectionName);
+      evt->addCollection(truejet_pfo_Nav.createLCCollection(), _trueJetPFOLink);
+      evt->addCollection(truejet_truepart_Nav.createLCCollection(), _trueJetMCParticleLink);
+      evt->addCollection(InitialElementon_Nav.createLCCollection(), _initialElementonLink);
+      evt->addCollection(FinalElementon_Nav.createLCCollection(), _finalElementonLink);
+      evt->addCollection(InitialColourNeutral_Nav.createLCCollection(), _initialColourNeutralLink);
+      evt->addCollection(FinalColourNeutral_Nav.createLCCollection(), _finalColourNeutralLink);
+
+      return;
+    }
 
     photon();
 
@@ -277,16 +311,11 @@ void TrueJet::processEvent(LCEvent* event) {
     // links are set up, as well.
 
     //*****************************
-    // create the navigators:
+    // jet_vec, fafpf_vec, fafpi_vec and the navigators were already created above, before the true_lepton() check.
 
     LCCollection* tjrcol = 0;
     LCCollection* tjtcol = 0;
-    LCRelationNavigator truejet_pfo_Nav(LCIO::RECONSTRUCTEDPARTICLE, LCIO::RECONSTRUCTEDPARTICLE);
-    LCRelationNavigator truejet_truepart_Nav(LCIO::RECONSTRUCTEDPARTICLE, LCIO::MCPARTICLE);
 
-    // create the collection-vector that will contain the true-jet objects:
-
-    LCCollectionVec* jet_vec = new LCCollectionVec(LCIO::RECONSTRUCTEDPARTICLE);
     auto jetPidHandler = UTIL::PIDHandler(jet_vec);
     const auto truePidID = jetPidHandler.addAlgorithm("TrueJetPID", {});
 
@@ -696,16 +725,12 @@ void TrueJet::processEvent(LCEvent* event) {
     // ! fill the two color-singlet blocks
     // post-PS part
 
-    LCCollectionVec* fafpf_vec = new LCCollectionVec(LCIO::RECONSTRUCTEDPARTICLE);
     auto fafpfPidHandler = UTIL::PIDHandler(fafpf_vec);
     auto fafpf_mainPidId = fafpfPidHandler.addAlgorithm("TrueJet_fafpf", {});
     std::array<int, 2> fafpf_pidIds{};
     for (size_t i = 0; i < fafpf_pidIds.size(); ++i) {
       fafpf_pidIds[i] = fafpfPidHandler.addAlgorithm("TrueJet_fafpf_jet_" + ::paddedNumber(i), {});
     }
-
-    LCRelationNavigator FinalColourNeutral_Nav(LCIO::RECONSTRUCTEDPARTICLE, LCIO::RECONSTRUCTEDPARTICLE);
-    LCRelationNavigator FinalElementon_Nav(LCIO::RECONSTRUCTEDPARTICLE, LCIO::MCPARTICLE);
 
     for (int k_dj_end = 1; k_dj_end <= n_dje; k_dj_end++) {
       double E = 0, M = 0, mom[3] = {};
@@ -844,16 +869,12 @@ void TrueJet::processEvent(LCEvent* event) {
 
     // pre-PS part
 
-    LCCollectionVec* fafpi_vec = new LCCollectionVec(LCIO::RECONSTRUCTEDPARTICLE);
     auto fafpiPidHandler = UTIL::PIDHandler(fafpi_vec);
     auto fafpi_mainPidId = fafpiPidHandler.addAlgorithm("TrueJet_fafpi", {});
     std::array<int, 25> fafpi_pidIds{};
     for (size_t i = 0; i < fafpi_pidIds.size(); ++i) {
       fafpi_pidIds[i] = fafpiPidHandler.addAlgorithm("TrueJet_fafpi_jet_" + ::paddedNumber(i), {});
     }
-
-    LCRelationNavigator InitialElementon_Nav(LCIO::RECONSTRUCTEDPARTICLE, LCIO::MCPARTICLE);
-    LCRelationNavigator InitialColourNeutral_Nav(LCIO::RECONSTRUCTEDPARTICLE, LCIO::RECONSTRUCTEDPARTICLE);
 
     for (int k_dj_begin = 1; k_dj_begin <= n_djb; k_dj_begin++) {
       double E = 0, M = 0, mom[3] = {0};
@@ -1676,7 +1697,7 @@ void TrueJet::stdhep_reader_bug_workaround(int line94) {
 
   } // if(inconsitent_pid || inconsitent_E )
 }
-void TrueJet::true_lepton() {
+bool TrueJet::true_lepton() {
   int ihard_lepton_1[4011] = {0};
   int ihard_lepton[4011] = {0};
   int lept = 0;
@@ -1751,7 +1772,7 @@ void TrueJet::true_lepton() {
   // and ihard_lepton_1[..] contains the list of pyjets lines of these
 
   if (n_hard_lepton == 0)
-    return;
+    return true;
 
   //! Sort the leptons in "color singlets", ie. in groups of flavour/anti-flavour. In most events this is
   //! the order they come in, but in the case of all flavour being the same, it isn't
@@ -1901,8 +1922,15 @@ void TrueJet::true_lepton() {
 
     // ! loop until either stable descendent found
 
-    while (k[lept][2] != 94 && k[lept][1] != 1 && k[lept][4] == k[lept][5]) {
-      lept = k[lept][4];
+    int n_execution = 0;
+    while ( k[lept][2] != 94 && k[lept][1] != 1 && k[lept][4] == k[lept][5] ) {
+      lept = k[lept][4] ;
+      n_execution++;
+
+      if (n_execution > 999) {
+      streamlog_out(ERROR) << "This should not happen, yet it did..." << std::endl;
+      return false;
+      }
     }
 
     streamlog_out(DEBUG2) << " after looping to stable : " << lept << " " << k[lept][2] << std::endl;
@@ -1948,6 +1976,7 @@ void TrueJet::true_lepton() {
     }
   }
   current_jet = current_jet + n_hard_lepton;
+  return true;
 }
 
 void TrueJet::cluster() {

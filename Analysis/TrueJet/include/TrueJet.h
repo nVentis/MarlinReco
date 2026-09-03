@@ -83,7 +83,7 @@ protected:
 private:
   void getPyjets(LCCollection* mcpcol);
   void stdhep_reader_bug_workaround(int line94);
-  void true_lepton();
+  bool true_lepton();
   void cluster();
   void string();
   void assign_jet(int jet1, int jet2, int this_fafp);
