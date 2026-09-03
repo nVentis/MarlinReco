@@ -176,7 +176,7 @@ void TrueJet::processEvent(LCEvent* event) {
       nfsr[kk] = 0;
     }
     bool seen[4001];
-    for (int kk = 1; kk <= 4000; kk++) {
+    for (int kk = 0; kk <= 4000; kk++) {
       jet[kk] = 0;
       companion[kk] = 0;
       seen[kk] = false;
@@ -325,6 +325,16 @@ void TrueJet::processEvent(LCEvent* event) {
 
     streamlog_out(DEBUG8) << "  Number of jets found : " << njet << std::endl;
 
+    if (njet >= 25) {
+      streamlog_out(ERROR) << " TrueJet: njet = " << njet
+                            << " -- tmomS[25][3], tES[25] and pid_type[25] below are only sized for indices 0..24 "
+                            << "but are written at 1-based index up to njet in the loop below. At njet==25 (or "
+                            << "higher) this is an off-by-one stack-buffer overflow at event " << evt->getEventNumber()
+                            << ", run " << evt->getRunNumber() << ". Aborting here (instead of silently overflowing) "
+                            << "to confirm this is the source of downstream heap corruption." << std::endl;
+      throw std::runtime_error("TrueJet: njet (" + std::to_string(njet) + ") would overflow tmomS/tES/pid_type[25]");
+    }
+
     double tmomS[25][3] = {0.};
     double tES[25] = {0.};
     int pid_type[25] = {0};
@@ -354,6 +364,17 @@ void TrueJet::processEvent(LCEvent* event) {
       int i_jet = abs(jet[k_py]);
       if (i_jet > 0) {
 
+        if (i_jet > (int)jet_vec->getNumberOfElements()) {
+          streamlog_out(ERROR) << " TrueJet: jet[" << k_py << "] = " << jet[k_py] << " (abs = " << i_jet
+                                << ") but jet_vec only has " << jet_vec->getNumberOfElements()
+                                << " elements (njet = " << njet << ") at event " << evt->getEventNumber() << ", run "
+                                << evt->getRunNumber()
+                                << ". getElementAt(i_jet-1) would read out of bounds and dynamic_cast garbage."
+                                << std::endl;
+          throw std::runtime_error("TrueJet: jet[k_py] index (" + std::to_string(i_jet) +
+                                    ") exceeds jet_vec size (" + std::to_string(jet_vec->getNumberOfElements()) + ")");
+        }
+
         true_jet = dynamic_cast<ReconstructedParticleImpl*>(jet_vec->getElementAt(i_jet - 1));
 
         // OK, add jet-to-true link
@@ -364,7 +385,8 @@ void TrueJet::processEvent(LCEvent* event) {
                               << jet[k_py];
 
         //*****************************
-        if (k[k_py][1] == 1 && k[k_py][2] == 22 && jet[k[k_py][3]] < 0 && k[k[k_py][3]][2] != 22) {
+        if (k[k_py][1] == 1 && k[k_py][2] == 22 && k[k_py][3] >= 0 && jet[k[k_py][3]] < 0 &&
+            k[k[k_py][3]][2] != 22) {
           // to be able to find FSRs, set weight to -ve for them
           truejet_truepart_Nav.addRelation(true_jet, mcp_pyjets[k_py], (jet[k_py] > 0 ? -(k[k_py][1]) % 30 : 0.0));
         } else {
@@ -525,7 +547,7 @@ void TrueJet::processEvent(LCEvent* event) {
           } // end reco-of-this-true loop
 
         } else { // end if reconstructed
-          if (seen[k[k_py][3]]) {
+          if (k[k_py][3] >= 0 && seen[k[k_py][3]]) {
             seen[k_py] = true; // this makes sure that in any decay-chain, only the first seen particle will includes in
                                // true-of-seen
             streamlog_out(DEBUG2) << " Ancestor of true particle " << k_py << " was seen, so particle " << k_py
@@ -1961,7 +1983,7 @@ bool TrueJet::true_lepton() {
   // a 94.
 
   for (int k_py = 1; k_py <= nlund; k_py++) {
-    if (jet[k_py] == 0 && k[k_py][2] != 94 && abs(jet[k[k_py][3]]) > current_jet &&
+    if (jet[k_py] == 0 && k[k_py][2] != 94 && k[k_py][3] >= 0 && abs(jet[k[k_py][3]]) > current_jet &&
         abs(jet[k[k_py][3]]) <= current_jet + n_hard_lepton) {
 
       // ! this is indeed a descendant of a hard lepton
@@ -2058,7 +2080,8 @@ void TrueJet::photon() {
     }
   }
   for (int k_py = 1; k_py <= nlund; k_py++) {
-    if (jet[k_py] == 0 && abs(jet[k[k_py][3]]) > current_jet && abs(jet[k[k_py][3]]) <= current_jet + nphot) {
+    if (jet[k_py] == 0 && k[k_py][3] >= 0 && abs(jet[k[k_py][3]]) > current_jet &&
+        abs(jet[k[k_py][3]]) <= current_jet + nphot) {
 
       //  ! this is indeed a descendant of a hard photon
 
@@ -2096,7 +2119,8 @@ void TrueJet::isr() {
     }
 
     for (int k_py = 1; k_py <= nlund; k_py++) {
-      if (jet[k_py] == 0 && abs(jet[k[k_py][3]]) > current_jet && abs(jet[k[k_py][3]]) <= current_jet + nisr) {
+      if (jet[k_py] == 0 && k[k_py][3] >= 0 && abs(jet[k[k_py][3]]) > current_jet &&
+          abs(jet[k[k_py][3]]) <= current_jet + nisr) {
 
         //  ! this is indeed a descendant of an isr
 
@@ -2333,13 +2357,14 @@ void TrueJet::assign_jet(int jet1, int jet2, int this_string) {
 
     if (jet[k_py] == 0 && k[k_py][1] < 30) { // if not already assigned, and not overlay. NB that the first
                                              // generation already was assigned above.
-      jet[k_py] = abs(jet[k[k_py][3]]);      // i.e. jet is the same as it's mother - fair enough !
+      jet[k_py] = (k[k_py][3] >= 0 ? abs(jet[k[k_py][3]]) : 0); // i.e. jet is the same as it's mother - fair enough !
       if (k[k_py][2] == 21 || abs(k[k_py][2]) <= 6) {
         //  can happen if a paricle decay is done by gluons (Ypsilon etc.)
         jet[k_py] = -jet[k_py];
       }
       if (jet[k_py] != 0)
-        streamlog_out(DEBUG1) << "     Particle " << k_py << " assigned to jet " << abs(jet[k[k_py][3]]) << std::endl;
+        streamlog_out(DEBUG1) << "     Particle " << k_py << " assigned to jet "
+                              << (k[k_py][3] >= 0 ? abs(jet[k[k_py][3]]) : 0) << std::endl;
     }
   }
 }
