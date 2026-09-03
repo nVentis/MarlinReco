@@ -51,6 +51,11 @@ ComprehensivePIDProcessor::ComprehensivePIDProcessor() : Processor("Comprehensiv
                              "you need to provide the reference and weight files; default: false.",
                              _modeInfer, false);
 
+  registerProcessorParameter("addMCPID",
+                             "Set true to add a PID output called 'MCPID' to the PFOs which is directly derived from "
+                             "MC information (no inference), not compatible with training mode; default: false.",
+                             _addMCPID, false);
+
   registerProcessorParameter(
       "TTreeFileName",
       "Name of the root file in which the TTree with all observables is stored; in case of extraction it is an "
@@ -144,6 +149,10 @@ void ComprehensivePIDProcessor::init() {
 
   if (_modeTrain && _modeInfer) {
     sloE << "I cannot train and infer in the same process!" << std::endl;
+    throw std::runtime_error("mode error");
+  }
+  if (_modeTrain && _addMCPID) {
+    sloE << "I cannot train and add MCPID in the same process!" << std::endl;
     throw std::runtime_error("mode error");
   }
 
@@ -410,7 +419,7 @@ void ComprehensivePIDProcessor::processEvent(LCEvent* evt) {
   if (_nAlgos == 0)
     return;
 
-  if (_modeExtract || _modeInfer) {
+  if (_modeExtract || _modeInfer || _addMCPID) {
     LCCollection *col_pfo{}, *col_pfo2mc{};
 
     try {
@@ -427,7 +436,7 @@ void ComprehensivePIDProcessor::processEvent(LCEvent* evt) {
     PIDHandler pidh(col_pfo);
     std::vector<int> algoID{};
     std::vector<int> allPDGs{};
-    if (_modeInfer) {
+    if (_modeInfer || _addMCPID) {
       std::vector<std::string> PDGness{};
       for (int pdg : _signalPDGs) {
         std::stringstream pn;
@@ -441,8 +450,12 @@ void ComprehensivePIDProcessor::processEvent(LCEvent* evt) {
         PDGness.push_back(pn.str());
         allPDGs.push_back(pdg);
       }
-      for (int m = 0; m < _nModels; ++m)
-        algoID.push_back(pidh.addAlgorithm(_trainModelNames[m], PDGness));
+      if (_modeInfer)
+        for (int m = 0; m < _nModels; ++m)
+          algoID.push_back(pidh.addAlgorithm(_trainModelNames[m], PDGness));
+
+      if (_addMCPID)
+        algoID.push_back(pidh.addAlgorithm("MCPID", PDGness));
     }
 
     for (int i = 0; i < n_pfo; ++i) {
@@ -567,6 +580,20 @@ void ComprehensivePIDProcessor::processEvent(LCEvent* evt) {
             break;
           }
       }
+
+      if (_addMCPID) {
+        sloD << "start adding MCPID" << std::endl;
+        std::vector<float> mcPID{};
+
+        for (int ipdg = 0; ipdg < (int)allPDGs.size(); ++ipdg) {
+          if (allPDGs[ipdg] == abs(MCPDG))
+            mcPID.push_back(1);
+          else
+            mcPID.push_back(0);
+        }
+
+        pidh.setParticleID(pfo, 0, abs(MCPDG), 0, pidh.getAlgorithmID("MCPID"), mcPID);
+      }
     } // for pfos
   }
 
@@ -633,8 +660,9 @@ void ComprehensivePIDProcessor::end() {
 
   for (int i = 0; i < _nAlgos; ++i)
     delete _inputAlgorithms[i];
-  for (int i = 0; i < _nModels; ++i)
-    delete _trainingModels[i];
+  if (_modeTrain || _modeInfer)
+    for (int i = 0; i < _nModels; ++i)
+      delete _trainingModels[i];
 
   sloM << "Numer of Events: " << _nEvt << "    Numer of PFOs: " << _nPFO << std::endl;
   sloM << "-------------------------------------------------" << std::endl;
