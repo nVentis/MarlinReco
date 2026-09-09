@@ -2536,7 +2536,8 @@ void TrueJet::grouping() {
   }
   for (int i_py = 1; i_py <= nlund; i_py++) {
     if (jet[i_py] > 0) {
-      if (k[i_py][1] == 11) {
+      if (k[i_py][1] == 11 && k[i_py][4] > 0) { // status 11 (decaying), but only if it actually has a recorded
+                                                // first daughter -- k[i_py][4] can be 0 (no daughters registered)
         double Ekid = 0;
         for (int jj = k[i_py][4]; jj <= k[i_py][5]; jj++) {
           Ekid += p[jj][4];
